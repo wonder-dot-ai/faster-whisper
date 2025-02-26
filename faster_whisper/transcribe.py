@@ -17,6 +17,7 @@ import tokenizers
 from tqdm import tqdm
 
 from faster_whisper.audio import decode_audio, pad_or_trim
+from faster_whisper.batched_feature_extractor import BatchedFeatureExtractor
 from faster_whisper.feature_extractor import FeatureExtractor
 from faster_whisper.tokenizer import _LANGUAGE_CODES, Tokenizer
 from faster_whisper.utils import download_model, format_timestamp, get_end, get_logger
@@ -191,10 +192,8 @@ class BatchedInferencePipeline:
 
     def transcribe_batch(
         self,
-        audios: List[
-            Union[str, BinaryIO, np.ndarray]
-        ],  # each up to 30s, already padded if needed
-        language: str = "en",
+        audios: List[Union[str, BinaryIO, np.ndarray]],
+        max_len: int = 30,
         task: str = "transcribe",
         beam_size: int = 5,
         best_of: int = 5,
@@ -248,8 +247,8 @@ class BatchedInferencePipeline:
             feats = self.model.feature_extractor(audio)[
                 ..., :-1
             ]  # shape (n_mels, n_frames)
-            # or pad/truncate your own way to exactly 30s if not already done:
-            feats = pad_or_trim(feats, self.model.feature_extractor.nb_max_frames)
+            # or pad/truncate to max_len milliseconds
+            feats = pad_or_trim(feats, max_len * 100)
 
             prepared_features.append(feats)
             metas.append(
