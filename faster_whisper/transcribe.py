@@ -17,7 +17,6 @@ import tokenizers
 from tqdm import tqdm
 
 from faster_whisper.audio import decode_audio, pad_or_trim
-from faster_whisper.batched_feature_extractor import BatchedFeatureExtractor
 from faster_whisper.feature_extractor import FeatureExtractor
 from faster_whisper.tokenizer import _LANGUAGE_CODES, Tokenizer
 from faster_whisper.utils import download_model, format_timestamp, get_end, get_logger
@@ -190,6 +189,110 @@ class BatchedInferencePipeline:
 
         return segmented_outputs
 
+    def forward_preprocessed(
+        self,
+        features: np.ndarray,  # shape [B, n_mels, n_frames]
+        metas: List[dict],  # metadata for each input in the batch
+        beam_size: int = 5,
+        best_of: int = 5,
+        patience: float = 1.0,
+        length_penalty: float = 1.0,
+        repetition_penalty: float = 1.0,
+        no_repeat_ngram_size: int = 0,
+        temperature: Union[float, List[float]] = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+        compression_ratio_threshold: float = 2.4,
+        log_prob_threshold: float = -1.0,
+        no_speech_threshold: float = 0.6,
+        condition_on_previous_text: bool = True,
+        prompt_reset_on_temperature: float = 0.5,
+        initial_prompt: Union[str, List[int]] = None,
+        prefix: str = None,
+        suppress_blank: bool = True,
+        without_timestamps: bool = False,
+        max_initial_timestamp: float = 1.0,
+        word_timestamps: bool = False,
+        prepend_punctuations: str = "\"'“¿([{-",
+        append_punctuations: str = "\"'.。,，!！?？:：”)]}、",
+        multilingual: bool = False,
+        max_new_tokens: int = None,
+        hotwords: str = None,
+    ) -> List[dict]:
+        """
+        Process preprocessed features directly, skipping the CPU-bound operations.
+        This method is designed to be used with a DataLoader that has already
+        performed the feature extraction and padding.
+
+        Args:
+            features: Preprocessed mel spectrogram features [B, n_mels, n_frames]
+            metas: List of metadata dictionaries for each input
+
+        Returns:
+            A list of dictionaries containing the transcription results
+        """
+        # Build a single set of "TranscriptionOptions"
+        transcription_options = TranscriptionOptions(
+            beam_size=beam_size,
+            best_of=best_of,
+            patience=patience,
+            length_penalty=length_penalty,
+            repetition_penalty=repetition_penalty,
+            no_repeat_ngram_size=no_repeat_ngram_size,
+            log_prob_threshold=log_prob_threshold,
+            no_speech_threshold=no_speech_threshold,
+            compression_ratio_threshold=compression_ratio_threshold,
+            condition_on_previous_text=condition_on_previous_text,
+            prompt_reset_on_temperature=prompt_reset_on_temperature,
+            temperatures=(
+                temperature if isinstance(temperature, (list, tuple)) else [temperature]
+            ),
+            initial_prompt=initial_prompt,
+            prefix=prefix,
+            suppress_blank=suppress_blank,
+            suppress_tokens=None,
+            without_timestamps=without_timestamps,
+            max_initial_timestamp=max_initial_timestamp,
+            word_timestamps=word_timestamps,
+            prepend_punctuations=prepend_punctuations,
+            append_punctuations=append_punctuations,
+            multilingual=multilingual,
+            max_new_tokens=max_new_tokens,
+            clip_timestamps="0",  # not used in this scenario
+            hallucination_silence_threshold=None,
+            hotwords=hotwords,
+        )
+
+        tokenizer = Tokenizer(
+            self.model.hf_tokenizer,
+            self.model.model.is_multilingual,
+            task="transcribe",
+            language="en",
+        )
+
+        # Run the model in batch
+        all_results = self.forward(
+            features,  # shape [B, n_mels, n_frames]
+            tokenizer,
+            metas,  # metadata list of length B
+            transcription_options,
+        )
+
+        # Process results
+        results = []
+        for subsegments_list in all_results:
+            results_for_this_audio = {"text": "", "confidence": 0.0}
+
+            for subseg in subsegments_list:
+                results_for_this_audio["text"] += subseg["text"]
+                results_for_this_audio["confidence"] += np.exp(subseg["avg_logprob"])
+
+            results_for_this_audio["text"] = results_for_this_audio["text"].strip()
+            if len(subsegments_list) > 0:
+                results_for_this_audio["confidence"] /= len(subsegments_list)
+
+            results.append(results_for_this_audio)
+
+        return results
+
     def transcribe_batch(
         self,
         audios: List[Union[str, BinaryIO, np.ndarray]],
@@ -232,7 +335,6 @@ class BatchedInferencePipeline:
         sampling_rate = self.model.feature_extractor.sampling_rate
         prepared_features = []
         metas = []
-        infos = []
 
         # Precompute the durations for each audio to build metadata
         for i, audio in enumerate(audios):
@@ -255,12 +357,10 @@ class BatchedInferencePipeline:
                 {
                     "start_time": 0.0,
                     "end_time": duration_sec,
-                    "audio_index": i,  # keep track in case you want to reorder
                 }
             )
 
         features = np.stack(prepared_features, axis=0)
-        B = len(prepared_features)
 
         # 4) Build a single set of "TranscriptionOptions"
         #    (the same options will be applied to each audio).
@@ -310,51 +410,20 @@ class BatchedInferencePipeline:
             transcription_options,
         )
 
-        all_segments = []
-        for b_idx, subsegments_list in enumerate(all_results):
-            segments_for_this_audio = []
-            seg_id = 1
-
-            # find actual language for this b_idx
-            audio_duration = metas[b_idx]["end_time"]
+        results = []
+        for subsegments_list in all_results:
+            results_for_this_audio = {"text": "", "confidence": 0.0}
 
             for subseg in subsegments_list:
-                segments_for_this_audio.append(
-                    Segment(
-                        id=seg_id,
-                        seek=subseg["seek"],
-                        start=round(subseg["start"], 3),
-                        end=round(subseg["end"], 3),
-                        text=subseg["text"],
-                        tokens=subseg["tokens"],
-                        temperature=transcription_options.temperatures[0],
-                        avg_logprob=subseg["avg_logprob"],
-                        compression_ratio=subseg["compression_ratio"],
-                        no_speech_prob=subseg["no_speech_prob"],
-                        words=(
-                            None
-                            if not transcription_options.word_timestamps
-                            else [Word(**w) for w in subseg["words"]]
-                        ),
-                    )
-                )
-                seg_id += 1
+                results_for_this_audio["text"] += subseg["text"]
+                results_for_this_audio["confidence"] += np.exp(subseg["avg_logprob"])
 
-            all_segments.append(segments_for_this_audio)
+            results_for_this_audio["text"] = results_for_this_audio["text"].strip()
+            results_for_this_audio["confidence"] /= len(subsegments_list)
 
-            # Build a TranscriptionInfo object for this audio
-            info = TranscriptionInfo(
-                language="en",
-                language_probability=1.0,
-                duration=audio_duration,
-                duration_after_vad=audio_duration,  # no VAD used here
-                all_language_probs=None,  # if we had it
-                transcription_options=transcription_options,
-                vad_options=None,  # no VAD in this example
-            )
-            infos.append(info)
+            results.append(results_for_this_audio)
 
-        return all_segments, infos
+        return results
 
     def generate_segment_batched(
         self,
