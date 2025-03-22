@@ -279,11 +279,12 @@ class BatchedInferencePipeline:
         # Process results
         results = []
         for subsegments_list in all_results:
-            results_for_this_audio = {"text": "", "confidence": 0.0}
+            results_for_this_audio = {"text": "", "confidence": 0.0, "words": []}
 
             for subseg in subsegments_list:
                 results_for_this_audio["text"] += subseg["text"]
                 results_for_this_audio["confidence"] += np.exp(subseg["avg_logprob"])
+                results_for_this_audio["words"].extend(subseg["words"])
 
             results_for_this_audio["text"] = results_for_this_audio["text"].strip()
             if len(subsegments_list) > 0:
@@ -2006,9 +2007,9 @@ class WhisperModel:
             languege_probability: Probability of the detected language.
             all_language_probs: List of tuples with all language names and probabilities.
         """
-        assert (
-            audio is not None or features is not None
-        ), "Either `audio` or `features` must be provided."
+        assert audio is not None or features is not None, (
+            "Either `audio` or `features` must be provided."
+        )
 
         if audio is not None:
             if vad_filter:
