@@ -959,7 +959,7 @@ class WhisperModel:
     def transcribe(
         self,
         audio: Union[str, BinaryIO, np.ndarray],
-        language: Optional[str] = None,
+        language: Optional[str] = "en",
         task: str = "transcribe",
         log_progress: bool = False,
         beam_size: int = 5,
