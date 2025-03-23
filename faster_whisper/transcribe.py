@@ -301,10 +301,16 @@ class BatchedInferencePipeline:
                 results_for_this_audio.confidence += np.exp(subseg["avg_logprob"])
                 words = map(
                     lambda word: InferenceResultWord(
-                        start=word["start"].item(),
-                        end=word["end"].item(),
+                        start=word["start"].item()
+                        if hasattr(word["start"], "item")
+                        else word["start"],
+                        end=word["end"].item()
+                        if hasattr(word["end"], "item")
+                        else word["end"],
                         word=word["word"],
-                        probability=word["probability"].item(),
+                        probability=word["probability"].item()
+                        if hasattr(word["probability"], "item")
+                        else word["probability"],
                     ),
                     subseg["words"],
                 )
