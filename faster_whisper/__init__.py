@@ -1,5 +1,10 @@
 from faster_whisper.audio import decode_audio
-from faster_whisper.transcribe import BatchedInferencePipeline, WhisperModel
+from faster_whisper.transcribe import (
+    BatchedInferencePipeline,
+    WhisperModel,
+    InferenceResult,
+    InferenceResultWord,
+)
 from faster_whisper.utils import available_models, download_model, format_timestamp
 from faster_whisper.version import __version__
 
@@ -8,6 +13,8 @@ __all__ = [
     "decode_audio",
     "WhisperModel",
     "BatchedInferencePipeline",
+    "InferenceResult",
+    "InferenceResultWord",
     "download_model",
     "format_timestamp",
     "__version__",
