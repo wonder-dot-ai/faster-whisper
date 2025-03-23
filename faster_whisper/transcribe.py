@@ -109,6 +109,21 @@ class TranscriptionInfo:
     vad_options: VadOptions
 
 
+@dataclass
+class InferenceResultWord:
+    start: float
+    end: float
+    word: str
+    probability: float
+
+
+@dataclass
+class InferenceResult:
+    text: str
+    confidence: float
+    words: List[InferenceResultWord]
+
+
 class BatchedInferencePipeline:
     def __init__(
         self,
@@ -216,7 +231,7 @@ class BatchedInferencePipeline:
         multilingual: bool = False,
         max_new_tokens: int = None,
         hotwords: str = None,
-    ) -> List[dict]:
+    ) -> List[InferenceResult]:
         """
         Process preprocessed features directly, skipping the CPU-bound operations.
         This method is designed to be used with a DataLoader that has already
@@ -279,21 +294,25 @@ class BatchedInferencePipeline:
         # Process results
         results = []
         for subsegments_list in all_results:
-            results_for_this_audio = {"text": "", "confidence": 0.0, "words": []}
+            results_for_this_audio = InferenceResult(text="", confidence=0.0, words=[])
 
             for subseg in subsegments_list:
-                results_for_this_audio["text"] += subseg["text"]
-                results_for_this_audio["confidence"] += np.exp(subseg["avg_logprob"])
-                words = subseg["words"]
-                for word in words:
-                    word["start"] = word["start"].item()
-                    word["end"] = word["end"].item()
-                    word["probability"] = word["probability"].item()
-                results_for_this_audio["words"].extend(words)
+                results_for_this_audio.text += subseg["text"]
+                results_for_this_audio.confidence += np.exp(subseg["avg_logprob"])
+                words = map(
+                    lambda word: InferenceResultWord(
+                        start=word["start"].item(),
+                        end=word["end"].item(),
+                        word=word["word"],
+                        probability=word["probability"].item(),
+                    ),
+                    subseg["words"],
+                )
+                results_for_this_audio.words.extend(words)
 
-            results_for_this_audio["text"] = results_for_this_audio["text"].strip()
+            results_for_this_audio.text = results_for_this_audio.text.strip()
             if len(subsegments_list) > 0:
-                results_for_this_audio["confidence"] /= len(subsegments_list)
+                results_for_this_audio.confidence /= len(subsegments_list)
 
             results.append(results_for_this_audio)
 
