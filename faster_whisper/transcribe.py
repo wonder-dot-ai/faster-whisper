@@ -284,7 +284,12 @@ class BatchedInferencePipeline:
             for subseg in subsegments_list:
                 results_for_this_audio["text"] += subseg["text"]
                 results_for_this_audio["confidence"] += np.exp(subseg["avg_logprob"])
-                results_for_this_audio["words"].extend(subseg["words"])
+                words = subseg["words"]
+                for word in words:
+                    word["start"] = word["start"].item()
+                    word["end"] = word["end"].item()
+                    word["probability"] = word["probability"].item()
+                results_for_this_audio["words"].extend(words)
 
             results_for_this_audio["text"] = results_for_this_audio["text"].strip()
             if len(subsegments_list) > 0:
